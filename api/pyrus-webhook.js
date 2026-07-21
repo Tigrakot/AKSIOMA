@@ -122,19 +122,8 @@ export default async function handler(req, res) {
       metadata: { pyrus_task_id: String(taskId) },
     };
 
-    // Если есть позиции — добавляем в чек
-    if (receiptItems.length > 0) {
-      // Минимальный items — попробуем передать только name+price+quantity
-      itpayBody.client_receipt = {
-        customer_email: 'oyyorel@aksiomins.ru',
-        taxation_system: 2,
-        items: receiptItems.map(item => ({
-          name: item.name,
-          price: item.price,
-          quantity: item.quantity,
-        })),
-      };
-    }
+    // items не передаём - ITPay сам формирует чек
+    // (если нужно будет добавить - раскомментируй и поправь формат)
 
     const itpayRes = await fetch(`${ITPAY_API}/payments`, {
       method: 'POST',
