@@ -182,15 +182,44 @@ export default async function handler(req, res) {
     await updateTaskField(taskId, FIELD_LINK, linkUrl);
     await updateTaskField(taskId, FIELD_STATUS, '⏳ Ждём оплату');
 
-    // 7. Добавляем комментарий
-    await addComment(
-      taskId,
-      `💳 Ссылка для оплаты создана!\n\n` +
-      `🔗 ${linkUrl}\n\n` +
-      `💰 Сумма: ${totalAmount} ₽\n` +
-      `📋 Заявка: ${orderId}\n\n` +
-      `После оплаты статус обновится автоматически.`
-    );
+    // 7. Формируем красивый чек
+    const receipt = itpay.data.receipts?.[0];
+    const shop = itpay.data.shop;
+    const items = receipt?.positions || [];
+    const itemsText = items.map((p, i) => {
+      const price = parseFloat(p.price) || 0;
+      const qty = parseFloat(p.quantity) || 1;
+      const total = price * qty;
+      return `${i+1}. ${p.label}\n   ${qty} ${p.unit_of_measurement || 'шт'} × ${price.toFixed(2)} ₽ = ${total.toFixed(2)} ₽\n   ${p.vat_label || 'Без НДС'}`;
+    }).join('\n\n') || '—';
+
+    const totalSum = receipt?.total_sum || totalAmount.toFixed(2);
+    const companyName = shop?.legal_entity?.name || 'ООО "АС ЭКСПЕРТ"';
+    const companyInn = receipt?.inn || shop?.legal_entity?.id || '';
+    const companyAddress = shop?.address || receipt?.address || '344002, г. Ростов-на-Дону, ул. Социалистическая, 74, оф. 601';
+    const created = (itpay.data.created || new Date().toISOString()).split('T')[0];
+    const taxation = receipt?.taxation_system === 2 ? 'УСН (доход - расход)' : 'УСН';
+    const customerEmail = receipt?.customer_email || 'oyyorel@aksiomins.ru';
+
+    const receiptComment = `🏢 ${companyName}` +
+      (companyInn ? `\n   ИНН: ${companyInn}` : '') +
+      `\n   Адрес: ${companyAddress}\n` +
+      `\n📋 Назначение: Оплата услуг АС Эксперт` +
+      `\n                по заявке ${orderId}` +
+      `\n📅 Дата: ${created}` +
+      `\n💰 ИТОГО: ${parseFloat(totalSum).toFixed(2)} ₽` +
+      `\n💳 Способ: СБП (Система быстрых платежей)` +
+      `\n📊 Система налогообложения: ${taxation}\n` +
+      `\n─────────────────────────────────────` +
+      `\nТОВАРЫ / УСЛУГИ:` +
+      `\n──────────────────────────────────────` +
+      `\n${itemsText}` +
+      `\n─────────────────────────────────────\n` +
+      `\n🔗 QR-код для оплаты:` +
+      `\n   ${linkUrl}\n` +
+      `\n📱 Чек отправлен на: ${customerEmail}`;
+
+    await addComment(taskId, receiptComment);
 
     return res.status(200).json({
       success: true,
