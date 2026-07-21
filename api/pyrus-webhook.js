@@ -53,16 +53,37 @@ export default async function handler(req, res) {
     // 3. Суммируем стоимость из таблицы услуг
     let totalAmount = 0;
     const servicesTable = fields.find(f => f.id === FIELD_TABLE);
+    // Собираем позиции чека: [{ name, price, quantity, vat, type, object }]
+    const receiptItems = [];
     if (servicesTable && Array.isArray(servicesTable.value)) {
       console.log(`[TABLE] rows: ${servicesTable.value.length}`);
       servicesTable.value.forEach((row, idx) => {
         if (row && Array.isArray(row.cells)) {
+          // Ячейка 12 — название услуги, 13 — стоимость
+          const nameCell = row.cells.find(c => c && c.id === 12);
           const costCell = row.cells.find(c => c && c.id === FIELD_COST_CELL);
           if (costCell && costCell.value !== null && costCell.value !== undefined && costCell.value !== '') {
             const val = parseFloat(String(costCell.value).replace(/\s/g, '').replace(',', '.'));
-            if (!isNaN(val)) {
+            if (!isNaN(val) && val > 0) {
               totalAmount += val;
-              console.log(`[TABLE] row ${idx}: +${val} (total: ${totalAmount})`);
+              // Название услуги (multiple_choice -> choice_names[0] или просто "Услуга X")
+              let serviceName = 'Услуга';
+              if (nameCell?.value?.choice_names && nameCell.value.choice_names.length > 0) {
+                serviceName = nameCell.value.choice_names.join(', ');
+              } else if (nameCell?.value) {
+                serviceName = String(nameCell.value);
+              }
+              // Для 54-ФЗ: name <= 128, type=1 (предоплата), object=4 (услуга), vat=6 (без НДС)
+              receiptItems.push({
+                name: serviceName.substring(0, 128),
+                price: val.toFixed(2),
+                quantity: '1',
+                vat: 6,       // НДС не облагается (УСН)
+                type: 1,      // Предоплата 100%
+                object: 4,    // Услуга
+                unit_of_measurement: 'шт',
+              });
+              console.log(`[TABLE] row ${idx}: +${val} (${serviceName})`);
             }
           }
         }
@@ -85,7 +106,7 @@ export default async function handler(req, res) {
     const params = new URLSearchParams({
       amount: totalAmount.toFixed(2),
       order_id: orderId,
-      description: `Оплата услуг АКСИОМА по заявке ${orderId}`,
+      description: `Оплата услуг АС Эксперт по заявке ${orderId}`,
       shop_id: process.env.ITPAY_SHOP_ID || '',
       type: 'normal',
       currency_in: 'RUB',
@@ -93,7 +114,22 @@ export default async function handler(req, res) {
       locale: 'ru',
     });
 
-    if (phone) params.set('payer_data[phone]', phone);
+    const itpayBody = {
+      amount: totalAmount.toFixed(2),
+      client_payment_id: orderId,
+      description: `Оплата услуг АС Эксперт по заявке ${orderId}`,
+      method: 'sbp',
+      metadata: { pyrus_task_id: String(taskId) },
+    };
+
+    // Если есть позиции — добавляем в чек
+    if (receiptItems.length > 0) {
+      itpayBody.client_receipt = {
+        customer_email: 'oyyorel@aksiomins.ru', // можно вынести в env
+        taxation_system: 2, // УСН доход - расход
+        items: receiptItems,
+      };
+    }
 
     const itpayRes = await fetch(`${ITPAY_API}/payments`, {
       method: 'POST',
@@ -101,13 +137,7 @@ export default async function handler(req, res) {
         'Authorization': ITPAY_AUTH,
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify({
-        amount: totalAmount.toFixed(2),
-        client_payment_id: orderId,
-        description: `Оплата услуг АКСИОМА по заявке ${orderId}`,
-        method: 'sbp',
-        metadata: { pyrus_task_id: String(taskId) },
-      }),
+      body: JSON.stringify(itpayBody),
     });
 
     const itpay = await itpayRes.json();
