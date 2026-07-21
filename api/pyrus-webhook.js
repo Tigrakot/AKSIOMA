@@ -5,7 +5,10 @@
 
 import { pyrusRequest, getPyrusToken, updateTaskField, addComment } from './_pyrus-auth.js';
 
-const ITPAY_API = 'https://itpay.app/api/v1';
+const ITPAY_API = 'https://api.gw.itpay.ru/v1';
+const ITPAY_PUBLIC_ID = process.env.ITPAY_PUBLIC_ID;
+const ITPAY_API_SECRET = process.env.ITPAY_API_SECRET;
+const ITPAY_AUTH = 'Basic ' + Buffer.from(`${ITPAY_PUBLIC_ID}:${ITPAY_API_SECRET}`).toString('base64');
 
 // ID полей формы Pyrus
 const FIELD_LINK = 10;        // Ссылка для оплаты
@@ -92,33 +95,48 @@ export default async function handler(req, res) {
 
     if (phone) params.set('payer_data[phone]', phone);
 
-    const itpayRes = await fetch(`${ITPAY_API}/bill/create`, {
+    const itpayRes = await fetch(`${ITPAY_API}/payments/create`, {
       method: 'POST',
       headers: {
-        'Authorization': `Bearer ${process.env.ITPAY_TOKEN || ''}`,
-        'Content-Type': 'application/x-www-form-urlencoded',
+        'Authorization': ITPAY_AUTH,
+        'Content-Type': 'application/json',
       },
-      body: params,
+      body: JSON.stringify({
+        amount: totalAmount.toFixed(2),
+        client_payment_id: orderId,
+        description: `Оплата услуг АКСИОМА по заявке ${orderId}`,
+        method: 'sbp',
+        payer_email: phone ? `${phone}@aksioma.ru` : undefined,
+      }),
     });
 
     const itpay = await itpayRes.json();
     console.log(`[ITPAY] response:`, JSON.stringify(itpay));
 
-    if (!itpay.success || !itpay.link_page_url) {
+    if (!itpay.success && !itpay.link_page_url) {
+      // Для gw.itpay.ru структура может быть {data: {link: ...}, error: null}
+      const errMsg = itpay.error || itpay.message || JSON.stringify(itpay);
       await updateTaskField(taskId, FIELD_STATUS, '❌ Ошибка ITPay');
-      await addComment(taskId, `❌ Ошибка ITPay:\n${itpay.message || JSON.stringify(itpay)}`);
+      await addComment(taskId, `❌ Ошибка ITPay:\n${errMsg}`);
       return res.status(500).json({ error: 'ITPay error', details: itpay });
     }
 
     // 6. Пишем ссылку и статус в Pyrus
-    await updateTaskField(taskId, FIELD_LINK, itpay.link_page_url);
+    // Для gw.itpay.ru ссылка может быть в itpay.data.link или itpay.link_page_url
+    const linkUrl = itpay.link_page_url || itpay.data?.link || itpay.data?.url || '';
+    if (!linkUrl) {
+      await updateTaskField(taskId, FIELD_STATUS, '❌ Нет ссылки');
+      await addComment(taskId, `❌ Не получили ссылку от ITPay:\n${JSON.stringify(itpay)}`);
+      return res.status(500).json({ error: 'No link in ITPay response' });
+    }
+    await updateTaskField(taskId, FIELD_LINK, linkUrl);
     await updateTaskField(taskId, FIELD_STATUS, '⏳ Ждём оплату');
 
     // 7. Добавляем комментарий
     await addComment(
       taskId,
       `💳 Ссылка для оплаты создана!\n\n` +
-      `🔗 ${itpay.link_page_url}\n\n` +
+      `🔗 ${linkUrl}\n\n` +
       `💰 Сумма: ${totalAmount} ₽\n` +
       `📋 Заявка: ${orderId}\n\n` +
       `После оплаты статус обновится автоматически.`
@@ -126,8 +144,8 @@ export default async function handler(req, res) {
 
     return res.status(200).json({
       success: true,
-      link_url: itpay.link_page_url,
-      bill_id: itpay.bill_id,
+      link_url: linkUrl,
+      bill_id: itpay.bill_id || itpay.data?.id,
     });
 
   } catch (error) {
