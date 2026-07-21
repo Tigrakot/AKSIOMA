@@ -43,7 +43,15 @@ export async function pyrusRequest(path, options = {}) {
       ...options.headers,
     },
   });
-  return response.json();
+  const text = await response.text();
+  if (!text) {
+    throw new Error(`Empty response from Pyrus API (status ${response.status})`);
+  }
+  try {
+    return JSON.parse(text);
+  } catch (e) {
+    throw new Error(`Failed to parse Pyrus response: ${text.substring(0, 200)}`);
+  }
 }
 
 /**
