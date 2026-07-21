@@ -61,10 +61,10 @@ export async function pyrusRequest(path, options = {}) {
  * @param {string} value - новое значение
  */
 export async function updateTaskField(taskId, fieldId, value) {
-  return pyrusRequest(`/tasks/${taskId}`, {
+  return pyrusRequest(`/tasks/${taskId}/comments`, {
     method: 'POST',
     body: JSON.stringify({
-      fields: [
+      field_updates: [
         { id: fieldId, value: value }
       ]
     }),
