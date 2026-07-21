@@ -111,14 +111,21 @@ export default async function handler(req, res) {
     });
 
     const itpay = await itpayRes.json();
-    console.log(`[ITPAY] response:`, JSON.stringify(itpay));
+    console.log(`[ITPAY] response:`, JSON.stringify(itpay).substring(0, 500));
 
-    if (!itpay.success && !itpay.link_page_url) {
-      // Для gw.itpay.ru структура может быть {data: {link: ...}, error: null}
+    // Для gw.itpay.ru структура: { error: null, error_code: null, data: {id, payment_qr_urls, ...} }
+    // Ошибка = error не null или error_code не null
+    if (itpay.error || (itpay.error_code !== null && itpay.error_code !== undefined)) {
       const errMsg = itpay.error || itpay.message || JSON.stringify(itpay);
       await updateTaskField(taskId, FIELD_STATUS, '❌ Ошибка ITPay');
       await addComment(taskId, `❌ Ошибка ITPay:\n${errMsg}`);
       return res.status(500).json({ error: 'ITPay error', details: itpay });
+    }
+
+    if (!itpay.data?.id) {
+      await updateTaskField(taskId, FIELD_STATUS, '❌ Нет ID');
+      await addComment(taskId, `❌ ITPay не вернул ID платежа:\n${JSON.stringify(itpay).substring(0, 500)}`);
+      return res.status(500).json({ error: 'No payment id' });
     }
 
     // 6. Пишем ссылку и статус в Pyrus
