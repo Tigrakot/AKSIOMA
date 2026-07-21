@@ -75,6 +75,9 @@ export default async function handler(req, res) {
       return res.status(400).json({ error: 'amount is 0', totalAmount });
     }
 
+    // Сразу пишем "В работе" чтобы видеть что Vercel обработал задачу
+    await updateTaskField(taskId, FIELD_STATUS, '⏳ В работе');
+
     // 5. Создаём bill в ITPay
     const params = new URLSearchParams({
       amount: totalAmount.toFixed(2),
