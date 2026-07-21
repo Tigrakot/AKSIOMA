@@ -95,7 +95,7 @@ export default async function handler(req, res) {
 
     if (phone) params.set('payer_data[phone]', phone);
 
-    const itpayRes = await fetch(`${ITPAY_API}/payments/create`, {
+    const itpayRes = await fetch(`${ITPAY_API}/payments`, {
       method: 'POST',
       headers: {
         'Authorization': ITPAY_AUTH,
@@ -106,7 +106,7 @@ export default async function handler(req, res) {
         client_payment_id: orderId,
         description: `Оплата услуг АКСИОМА по заявке ${orderId}`,
         method: 'sbp',
-        payer_email: phone ? `${phone}@aksioma.ru` : undefined,
+        metadata: { pyrus_task_id: String(taskId) },
       }),
     });
 
@@ -122,11 +122,24 @@ export default async function handler(req, res) {
     }
 
     // 6. Пишем ссылку и статус в Pyrus
-    // Для gw.itpay.ru ссылка может быть в itpay.data.link или itpay.link_page_url
-    const linkUrl = itpay.link_page_url || itpay.data?.link || itpay.data?.url || '';
+    // Для gw.itpay.ru ссылка находится в itpay.data.payment_qr_urls (JSON)
+    let linkUrl = '';
+    try {
+      const qrUrls = typeof itpay.data?.payment_qr_urls === 'string'
+        ? JSON.parse(itpay.data.payment_qr_urls)
+        : itpay.data?.payment_qr_urls;
+      linkUrl = qrUrls?.desktop || qrUrls?.android || qrUrls?.ios || '';
+    } catch (e) {
+      console.log('Failed to parse payment_qr_urls:', e.message);
+    }
+    if (!linkUrl) {
+      // fallback - смотрим receipt link
+      const receiptLink = itpay.data?.receipts?.[0]?.link_to_receipt;
+      linkUrl = receiptLink || itpay.data?.payment_url || '';
+    }
     if (!linkUrl) {
       await updateTaskField(taskId, FIELD_STATUS, '❌ Нет ссылки');
-      await addComment(taskId, `❌ Не получили ссылку от ITPay:\n${JSON.stringify(itpay)}`);
+      await addComment(taskId, `❌ Не получили ссылку от ITPay:\n${JSON.stringify(itpay).substring(0, 500)}`);
       return res.status(500).json({ error: 'No link in ITPay response' });
     }
     await updateTaskField(taskId, FIELD_LINK, linkUrl);
