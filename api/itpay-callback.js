@@ -22,6 +22,8 @@ export default async function handler(req, res) {
     const currency = paymentData.currency || 'RUB';
     const paid = paymentData.paid;
     const paymentId = paymentData.id;
+    // task_id может прийти в metadata (если ITpay его передаёт)
+    const taskIdFromMeta = paymentData.metadata?.pyrus_task_id;
 
     console.log(`[ITPAY CALLBACK] order=${orderId}, status=${status}`);
 
@@ -32,9 +34,12 @@ export default async function handler(req, res) {
 
     // Если orderId = "TASK-123" → taskId = "123"
     let taskId = null;
-    if (orderId.startsWith('TASK-')) {
+    if (taskIdFromMeta) {
+      taskId = taskIdFromMeta;
+      console.log(`[ITPAY CALLBACK] Got task_id from metadata: ${taskId}`);
+    } else if (orderId && orderId.startsWith('TASK-')) {
       taskId = orderId.replace('TASK-', '');
-    } else if (/^\d+$/.test(orderId)) {
+    } else if (orderId && /^\d+$/.test(orderId)) {
       taskId = orderId;
     } else {
       // orderId = текстовый номер заявки ("Т-685-7-26")
@@ -52,13 +57,26 @@ export default async function handler(req, res) {
           console.log(`[ITPAY CALLBACK] Register returned ${registerData.tasks?.length || 0} tasks`);
 
           if (registerData.tasks && registerData.tasks.length > 0) {
+            // Нормализуем orderId для сравнения (убираем год "-20XX" в конце)
+            // "3002-07-26" → "3002-07", "3002-07-2026" → "3002-07"
+            const normalize = (s) => s ? s.replace(/-\d{4}$/, '').replace(/-\d{2}$/, '') : '';
+            const orderIdNorm = normalize(orderId);
+
             for (const task of registerData.tasks) {
               if (task.fields) {
                 const orderField = task.fields.find(f => f.id === 2);
-                if (orderField && orderField.value && orderField.value === orderId) {
-                  taskId = task.id;
-                  console.log(`[ITPAY CALLBACK] Found by field 2: ${taskId}`);
-                  break;
+                if (orderField && orderField.value) {
+                  if (orderField.value === orderId) {
+                    taskId = task.id;
+                    console.log(`[ITPAY CALLBACK] Found exact: ${taskId}`);
+                    break;
+                  }
+                  const pyrusNorm = normalize(orderField.value);
+                  if (pyrusNorm && pyrusNorm === orderIdNorm) {
+                    taskId = task.id;
+                    console.log(`[ITPAY CALLBACK] Found by normalized match: ${taskId} (${orderField.value} ~ ${orderId})`);
+                    break;
+                  }
                 }
               }
               if (!taskId && task.text && task.text.includes(orderId)) {
@@ -86,10 +104,17 @@ export default async function handler(req, res) {
       return res.status(200).json({ status: 0, message: taskRes.error || 'No task' });
     }
 
+    // Проверяем текущий статус — если уже "Оплачено", пропускаем
+    const currentStatus = taskRes.task.fields?.find(f => f.id === 11)?.value || '';
+    const successStatuses = ['paid', 'completed', 'success'];
+    if (currentStatus.includes('Оплачено') && successStatuses.includes(status?.toLowerCase())) {
+      console.log(`[ITPAY CALLBACK] Task ${taskId} already paid, skipping duplicate`);
+      return res.status(200).json({ status: 0, message: 'Already paid' });
+    }
+
     // Определяем статус
     let newStatus = '';
     let commentText = '';
-    const successStatuses = ['paid', 'completed', 'success'];
     const failedStatuses = ['cancelled', 'rejected', 'error', 'failed'];
 
     if (successStatuses.includes(status?.toLowerCase())) {
