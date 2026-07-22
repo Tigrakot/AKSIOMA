@@ -1,8 +1,3 @@
-/**
- * Pyrus API helper с авторизацией
- * Кэширует access_token на 23 часа
- */
-
 let cachedToken = null;
 let tokenExpires = 0;
 
@@ -52,9 +47,6 @@ export async function pyrusRequest(path, options = {}) {
   }
 }
 
-/**
- * Добавить комментарий с обновлением поля одним запросом
- */
 export async function addCommentWithFieldUpdate(taskId, fieldUpdates, text) {
   const token = await getPyrusToken();
   const body = { text };
@@ -72,15 +64,4 @@ export async function addCommentWithFieldUpdate(taskId, fieldUpdates, text) {
   const t = await response.text();
   if (!t) return {};
   return JSON.parse(t);
-}
- * Добавить комментарий к задаче
- */
-export async function addComment(taskId, text) {
-  return pyrusRequest(`/tasks/${taskId}/comments`, {
-    method: 'POST',
-    body: JSON.stringify({
-      text: text,
-      attachments: [],
-    }),
-  });
 }
