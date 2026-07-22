@@ -41,9 +41,10 @@ export default async function handler(req, res) {
       // Ищем задачу через поиск Pyrus API
       try {
         const token = await getPyrusToken();
+        const formId = process.env.PYRUS_FORM_ID || '2450518';
         // Используем search endpoint
         const searchRes = await fetch(
-          `${PYRUS_API}/tasks?form_id=2450518`,
+          `${PYRUS_API}/tasks?form_id=${formId}`,
           { headers: { 'Authorization': `Bearer ${token}` } }
         );
         const searchData = await searchRes.json();
@@ -86,76 +87,6 @@ export default async function handler(req, res) {
     }
 
     // Определяем статус
-    let newStatus = '';
-    let commentText = '';
-    const successStatuses = ['paid', 'completed', 'success'];
-    const failedStatuses = ['cancelled', 'rejected', 'error', 'failed'];
-
-    if (successStatuses.includes(status?.toLowerCase())) {
-      newStatus = '✅ Оплачено';
-      commentText = `💰 **ОПЛАТА ПОЛУЧЕНА!**\n\n` +
-        `💵 Сумма: ${amount} ${currency}\n` +
-        `📅 ${paid || new Date().toISOString()}\n` +
-        `🆔 ${paymentId}\n📋 ${orderId}`;
-    } else if (failedStatuses.includes(status?.toLowerCase())) {
-      newStatus = '❌ Ошибка оплаты';
-      commentText = `❌ Ошибка оплаты: ${status}\n🆔 ${paymentId}\n📋 ${orderId}`;
-    } else if (status === 'processing') {
-      newStatus = '⏳ Обрабатывается';
-      commentText = `⏳ Платёж обрабатывается\n🆔 ${paymentId}\n📋 ${orderId}`;
-    } else {
-      console.log(`[ITPAY CALLBACK] Unknown status: ${status}`);
-      return res.status(200).json({ status: 0 });
-    }
-
-    await addCommentWithFieldUpdate(
-      taskId,
-      [{ id: 11, value: newStatus }],
-      commentText
-    );
-
-    console.log(`[ITPAY CALLBACK] Updated task ${taskId} → ${newStatus}`);
-    return res.status(200).json({ status: 0 });
-
-  } catch (error) {
-    console.error('[ITPAY CALLBACK] Error:', error);
-    return res.status(200).json({ status: 0, error: error.message });
-  }
-}
-    const amount = paymentData.amount;
-    const currency = paymentData.currency || 'RUB';
-    const paid = paymentData.paid;
-    const paymentId = paymentData.id;
-
-    console.log(`[ITPAY CALLBACK] order=${orderId}, status=${status}`);
-
-    let taskId = null;
-    if (orderId && typeof orderId === 'string') {
-      if (orderId.startsWith('TASK-')) {
-        taskId = orderId.replace('TASK-', '');
-      } else if (/^\d+$/.test(orderId)) {
-        // Числовой orderId = это taskId напрямую
-        taskId = orderId;
-      } else {
-        // Текстовый orderId (например "Т-685-7-26") — ищем задачу в Pyrus
-        console.log(`[ITPAY CALLBACK] Searching task by orderId: ${orderId}`);
-        taskId = await findTaskByOrderId(orderId);
-        console.log(`[ITPAY CALLBACK] Found task_id: ${taskId}`);
-      }
-    }
-
-    if (!taskId) {
-      console.log('[ITPAY CALLBACK] No task_id found, skipping');
-      return res.status(200).json({ status: 0, message: 'No task_id' });
-    }
-
-    // Проверяем доступ
-    const taskRes = await pyrusRequest(`/tasks/${taskId}`);
-    if (taskRes.error || !taskRes.task) {
-      console.log(`[ITPAY CALLBACK] Task access error: ${taskRes.error}`);
-      return res.status(200).json({ status: 0, message: taskRes.error || 'No task' });
-    }
-
     let newStatus = '';
     let commentText = '';
     const successStatuses = ['paid', 'completed', 'success'];
