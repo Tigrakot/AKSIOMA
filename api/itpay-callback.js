@@ -38,32 +38,32 @@ export default async function handler(req, res) {
       taskId = orderId;
     } else {
       // orderId = текстовый номер заявки ("Т-685-7-26")
-      // Ищем задачу через поиск Pyrus API
+      // Получаем реестр задач формы (все задачи) и ищем по номеру
       try {
         const token = await getPyrusToken();
         const formId = process.env.PYRUS_FORM_ID || '2450518';
-        // Используем search endpoint
-        const searchRes = await fetch(
-          `${PYRUS_API}/tasks?form_id=${formId}`,
+        const registerRes = await fetch(
+          `${PYRUS_API}/forms/${formId}/register`,
           { headers: { 'Authorization': `Bearer ${token}` } }
         );
-        const searchData = await searchRes.json();
-        console.log(`[ITPAY CALLBACK] Search returned ${searchData.tasks?.length || 0} tasks`);
+        const text = await registerRes.text();
+        if (text) {
+          const registerData = JSON.parse(text);
+          console.log(`[ITPAY CALLBACK] Register returned ${registerData.tasks?.length || 0} tasks`);
 
-        if (searchData.tasks && searchData.tasks.length > 0) {
-          for (const task of searchData.tasks) {
-            // Проверяем title (там обычно есть "DIGITAL KASSA: <НомерЗаявки>")
-            if (task.text && task.text.includes(orderId)) {
-              taskId = task.id;
-              console.log(`[ITPAY CALLBACK] Found in title: ${taskId}`);
-              break;
-            }
-            // Или проверяем поле "Номер заявки" (ID 2)
-            if (task.fields) {
-              const orderField = task.fields.find(f => f.id === 2);
-              if (orderField && orderField.value && orderField.value.includes(orderId)) {
+          if (registerData.tasks && registerData.tasks.length > 0) {
+            for (const task of registerData.tasks) {
+              if (task.fields) {
+                const orderField = task.fields.find(f => f.id === 2);
+                if (orderField && orderField.value && orderField.value === orderId) {
+                  taskId = task.id;
+                  console.log(`[ITPAY CALLBACK] Found by field 2: ${taskId}`);
+                  break;
+                }
+              }
+              if (!taskId && task.text && task.text.includes(orderId)) {
                 taskId = task.id;
-                console.log(`[ITPAY CALLBACK] Found in field 2: ${taskId}`);
+                console.log(`[ITPAY CALLBACK] Found in title: ${taskId}`);
                 break;
               }
             }
