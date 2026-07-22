@@ -1,5 +1,6 @@
 /**
- * Pyrus API helper с авторизацией через /auth
+ * Pyrus API helper с авторизацией
+ * Кэширует access_token на 23 часа
  */
 
 let cachedToken = null;
@@ -23,8 +24,7 @@ export async function getPyrusToken() {
   });
 
   if (!response.ok) {
-    const err = await response.text();
-    throw new Error(`Pyrus auth failed: ${response.status} ${err}`);
+    throw new Error(`Pyrus auth failed: ${response.status}`);
   }
 
   const data = await response.json();
@@ -44,34 +44,35 @@ export async function pyrusRequest(path, options = {}) {
     },
   });
   const text = await response.text();
-  if (!text) {
-    throw new Error(`Empty response from Pyrus API (status ${response.status})`);
-  }
+  if (!text) return {};
   try {
     return JSON.parse(text);
   } catch (e) {
-    throw new Error(`Failed to parse Pyrus response: ${text.substring(0, 200)}`);
+    throw new Error(`Parse error: ${text.substring(0, 200)}`);
   }
 }
 
 /**
- * Обновить значение поля в задаче
- * @param {number} taskId - ID задачи
- * @param {number} fieldId - ID поля (10 = Ссылка, 11 = Статус)
- * @param {string} value - новое значение
+ * Добавить комментарий с обновлением поля одним запросом
  */
-export async function updateTaskField(taskId, fieldId, value) {
-  return pyrusRequest(`/tasks/${taskId}/comments`, {
+export async function addCommentWithFieldUpdate(taskId, fieldUpdates, text) {
+  const token = await getPyrusToken();
+  const body = { text };
+  if (fieldUpdates && fieldUpdates.length > 0) {
+    body.field_updates = fieldUpdates;
+  }
+  const response = await fetch(`https://api.pyrus.com/v4/tasks/${taskId}/comments`, {
     method: 'POST',
-    body: JSON.stringify({
-      field_updates: [
-        { id: fieldId, value: value }
-      ]
-    }),
+    headers: {
+      'Authorization': `Bearer ${token}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(body),
   });
+  const t = await response.text();
+  if (!t) return {};
+  return JSON.parse(t);
 }
-
-/**
  * Добавить комментарий к задаче
  */
 export async function addComment(taskId, text) {
