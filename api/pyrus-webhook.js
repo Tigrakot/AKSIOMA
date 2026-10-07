@@ -81,7 +81,7 @@ export default async function handler(req, res) {
       body: JSON.stringify({
         amount: totalAmount.toFixed(2),
         client_payment_id: orderId,
-        description: `Оплата услуг АС Эксперт по заявке ${orderId}`,
+        description: `Оплата услуг АС Эксперт по заявке ${orderId}. Выезд эксперта на место осмотра и экспертные услуги`,
         method: 'sbp',
         metadata: { pyrus_task_id: String(taskId) },
       }),
