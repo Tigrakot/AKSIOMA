@@ -265,9 +265,10 @@ async function createPayments() {
 
 export default async function handler(req, res) {
   try {
+    // Polling всегда — проверяем статусы
     const pollResult = await pollPending();
-    const create = req.query.create === '1';
-    const createResult = create ? await createPayments() : { created: 0 };
+    // Создание платежей тоже всегда — новые задачи сразу получают ссылку
+    const createResult = await createPayments();
 
     return res.status(200).json({
       polled: pollResult.polled,
