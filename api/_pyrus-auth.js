@@ -47,11 +47,14 @@ export async function pyrusRequest(path, options = {}) {
   }
 }
 
-export async function addCommentWithFieldUpdate(taskId, fieldUpdates, text) {
+export async function addCommentWithFieldUpdate(taskId, fieldUpdates, text, attachments = null) {
   const token = await getPyrusToken();
   const body = { text };
   if (fieldUpdates && fieldUpdates.length > 0) {
     body.field_updates = fieldUpdates;
+  }
+  if (attachments && attachments.length > 0) {
+    body.attachments = attachments;
   }
   const response = await fetch(`https://api.pyrus.com/v4/tasks/${taskId}/comments`, {
     method: 'POST',
@@ -64,4 +67,21 @@ export async function addCommentWithFieldUpdate(taskId, fieldUpdates, text) {
   const t = await response.text();
   if (!t) return {};
   return JSON.parse(t);
+}
+
+// Загрузка файла в Pyrus (получаем guid для прикрепления к комменту)
+export async function uploadPyrusFile(filename, buffer) {
+  const token = await getPyrusToken();
+  const form = new FormData();
+  form.append('file', new Blob([buffer]), filename);
+  const response = await fetch('https://api.pyrus.com/v4/files/upload', {
+    method: 'POST',
+    headers: { 'Authorization': `Bearer ${token}` },
+    body: form,
+  });
+  if (!response.ok) {
+    throw new Error(`Upload failed: ${response.status}`);
+  }
+  const data = await response.json();
+  return { guid: data.guid || data.id };
 }
