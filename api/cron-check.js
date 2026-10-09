@@ -201,7 +201,7 @@ async function createPayments() {
         body: JSON.stringify({
           amount: total.toFixed(2),
           client_payment_id: orderId,
-          description: `Оплата услуг АС Эксперт по заявке ${orderId}`,
+          description: `Оплата услуг АС Эксперт по заявке ${orderId} Выезд эксперта на место осмотра и экспертные услуги.`,
           method: 'sbp',
           metadata: { pyrus_task_id: String(taskId) },
         }),
