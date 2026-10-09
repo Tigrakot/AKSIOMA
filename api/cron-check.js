@@ -1,4 +1,4 @@
-import { pyrusRequest, getPyrusToken, addCommentWithFieldUpdate, uploadPyrusFile } from './_pyrus-auth.js';
+import { getPyrusToken, addCommentWithFieldUpdate, uploadPyrusFile } from './_pyrus-auth.js';
 
 const ITPAY_API = 'https://api.gw.itpay.ru/v1';
 const ITPAY_PUBLIC_ID = process.env.ITPAY_PUBLIC_ID;
@@ -128,10 +128,8 @@ async function processPayment(taskId, payment) {
 }
 
 // In-memory кэш задач которые уже в процессе обработки
+// Важно: в Vercel serverless каждый cold start = новый инстанс, кэш сбрасывается
 const processingSet = new Set();
-
-// In-memory кэш задач которые уже отправлены на оплату
-const sentPayments = new Map();
 
 // ============================================================
 // POLLING: проверяем задачи которые ждут оплату
@@ -176,12 +174,8 @@ async function pollPendingPayments() {
 
     if (payment) {
       processingSet.add(taskId);
-      try {
-        const updated = await processPayment(taskId, payment);
-        if (updated) paidCount++;
-      } finally {
-        setTimeout(() => processingSet.delete(taskId), 5 * 60 * 1000);
-      }
+      const updated = await processPayment(taskId, payment);
+      if (updated) paidCount++;
     }
   }
 
@@ -215,8 +209,6 @@ async function createPayments() {
 
     const linkField = task.fields?.find(f => f.id === FIELD_LINK);
     if (linkField?.value) continue;
-
-    if (sentPayments.has(taskId)) continue;
 
     const statusField = task.fields?.find(f => f.id === FIELD_STATUS);
     const status = statusField?.value || '';
@@ -268,7 +260,6 @@ async function createPayments() {
       if (!itpay.data?.id) continue;
 
       const itpayPaymentId = itpay.data.id;
-      sentPayments.set(taskId, itpayPaymentId);
 
       let linkUrl = '';
       try {
