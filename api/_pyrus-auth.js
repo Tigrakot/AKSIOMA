@@ -68,20 +68,3 @@ export async function addCommentWithFieldUpdate(taskId, fieldUpdates, text, atta
   if (!t) return {};
   return JSON.parse(t);
 }
-
-// Загрузка файла в Pyrus (получаем guid для прикрепления к комменту)
-export async function uploadPyrusFile(filename, buffer) {
-  const token = await getPyrusToken();
-  const form = new FormData();
-  form.append('file', new Blob([buffer]), filename);
-  const response = await fetch('https://api.pyrus.com/v4/files/upload', {
-    method: 'POST',
-    headers: { 'Authorization': `Bearer ${token}` },
-    body: form,
-  });
-  if (!response.ok) {
-    throw new Error(`Upload failed: ${response.status}`);
-  }
-  const data = await response.json();
-  return { guid: data.guid || data.id };
-}
