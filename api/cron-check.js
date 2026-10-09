@@ -10,31 +10,29 @@ const FIELD_STATUS = 11;
 const FIELD_ORDER_ID = 2;
 const FIELD_TABLE = 9;
 const FIELD_COST_CELL = 13;
-const FIELD_ITPAY_ID = 20; // ID платежа ITPay
+const FIELD_ITPAY_ID = 20;
 
-// Проверяем статус платежа через ITPay API по payment_id (GET /v1/payments/{id})
-async function checkItpayPaymentById(paymentId) {
+// Проверка статуса платежа по ID (GET /v1/payments/{id})
+async function checkItpayById(paymentId) {
   try {
     const res = await fetch(`${ITPAY_API}/payments/${paymentId}`, {
       headers: { 'Authorization': ITPAY_AUTH },
     });
-
     if (!res.ok) {
       const text = await res.text();
-      console.log(`[POLL] ITPay GET /payments/${paymentId} error: ${res.status} - ${text.substring(0, 200)}`);
+      console.log(`[POLL] Error ${paymentId}: ${res.status} ${text.substring(0, 100)}`);
       return null;
     }
-
     const data = await res.json();
-    console.log(`[POLL] payment=${paymentId}, status=${data.status}, data:`, JSON.stringify(data).substring(0, 300));
+    console.log(`[POLL] ${paymentId} → status=${data.status}`);
     return data;
   } catch (e) {
-    console.error(`[POLL] Error checking ITPay payment ${paymentId}:`, e.message);
+    console.error(`[POLL] Exception ${paymentId}: ${e.message}`);
     return null;
   }
 }
 
-// Скачать PDF-чек по ссылке
+// Скачать PDF чека
 async function downloadReceipt(linkToReceipt) {
   if (!linkToReceipt) return null;
   try {
@@ -42,12 +40,10 @@ async function downloadReceipt(linkToReceipt) {
     if (!res.ok) return null;
     const buffer = Buffer.from(await res.arrayBuffer());
     return { buffer, filename: `Чек_${Date.now()}.pdf` };
-  } catch (e) {
-    return null;
-  }
+  } catch (e) { return null; }
 }
 
-// Скачать PDF-чек через ITPay API по receipt_id
+// Скачать PDF через receipt_id
 async function fetchReceiptById(receiptId) {
   if (!receiptId) return null;
   try {
@@ -56,16 +52,12 @@ async function fetchReceiptById(receiptId) {
     });
     if (!res.ok) return null;
     const data = await res.json();
-    if (data.link_to_receipt) {
-      return await downloadReceipt(data.link_to_receipt);
-    }
+    if (data.link_to_receipt) return await downloadReceipt(data.link_to_receipt);
     return null;
-  } catch (e) {
-    return null;
-  }
+  } catch (e) { return null; }
 }
 
-// Обработать успешную оплату: обновить статус и приложить чек
+// Обработать успешную оплату
 async function processPayment(taskId, payment) {
   const paymentId = payment.id;
   const amount = payment.amount;
@@ -75,26 +67,15 @@ async function processPayment(taskId, payment) {
   const linkToReceipt = payment.link_to_receipt || payment.receipt_url || null;
   const receiptId = payment.receipt_id || payment.receipt?.id || null;
 
-  console.log(`[POLL] Payment success: task=${taskId}, payment=${paymentId}, amount=${amount}`);
+  console.log(`[POLL] Paid: task=${taskId}, payment=${paymentId}, amount=${amount}`);
 
   let attachmentGuids = [];
-  let receipt = null;
-  if (linkToReceipt) {
-    receipt = await downloadReceipt(linkToReceipt);
-  } else if (receiptId) {
-    receipt = await fetchReceiptById(receiptId);
-  }
-
+  let receipt = linkToReceipt ? await downloadReceipt(linkToReceipt) : await fetchReceiptById(receiptId);
   if (receipt) {
     try {
       const uploaded = await uploadPyrusFile(receipt.filename, receipt.buffer);
       attachmentGuids = [uploaded.guid];
-      console.log(`[POLL] Receipt uploaded: ${receipt.filename}`);
-    } catch (e) {
-      console.error('[POLL] Receipt upload failed:', e.message);
-    }
-  } else {
-    console.log('[POLL] No receipt available yet');
+    } catch (e) { console.log(`[POLL] Receipt upload failed: ${e.message}`); }
   }
 
   const commentText = `💰 **ОПЛАТА ПОЛУЧЕНА!**\n\n` +
@@ -109,147 +90,116 @@ async function processPayment(taskId, payment) {
     commentText,
     attachmentGuids.length > 0 ? attachmentGuids : null
   );
-
-  console.log(`[POLL] Task ${taskId} updated → ✅ Оплачено`);
   return true;
 }
 
-// In-memory кэш задач которые уже в процессе обработки
-// Важно: в Vercel serverless каждый cold start = новый инстанс, кэш сбрасывается
+// Кэш обрабатываемых задач (в RAM, сбрасывается при cold start)
 const processingSet = new Set();
 
 // ============================================================
-// POLLING: проверяем задачи которые ждут оплату
+// POLLING: проверяем задачи со статусом "ждём оплату"
 // ============================================================
-async function pollPendingPayments() {
-  console.log('[POLL] === Polling started ===');
+async function pollPending() {
+  console.log('[POLL] Polling...');
   const token = await getPyrusToken();
   const formId = process.env.PYRUS_FORM_ID || '2450518';
 
-  const registerRes = await fetch(
-    `https://api.pyrus.com/v4/forms/${formId}/register`,
-    { headers: { 'Authorization': `Bearer ${token}` } }
-  );
-  const text = await registerRes.text();
-  if (!text) {
-    console.log('[POLL] No tasks received');
-    return { polled: 0, paid: 0 };
-  }
+  const res = await fetch(`https://api.pyrus.com/v4/forms/${formId}/register`,
+    { headers: { 'Authorization': `Bearer ${token}` } });
+  const text = await res.text();
+  if (!text) return { polled: 0, paid: 0 };
 
   const data = JSON.parse(text);
-  // Фильтруем задачи которые уже обрабатываем
   const tasks = (data.tasks || []).filter(t => !processingSet.has(t.id));
-  console.log(`[POLL] Checking ${tasks.length} tasks for pending payments`);
-
+  console.log(`[POLL] ${tasks.length} tasks`);
   let paidCount = 0;
 
   for (const task of tasks) {
     const taskId = task.id;
     const statusField = task.fields?.find(f => f.id === FIELD_STATUS);
-    const status = statusField?.value || '';
+    if (!statusField?.value?.includes('⏳')) continue;
 
-    // Пропускаем если не "Ждём оплату"
-    if (!status.includes('⏳')) continue;
-
-    // Получаем ITPay payment_id из поля 20
     const itpayIdField = task.fields?.find(f => f.id === FIELD_ITPAY_ID);
-    const itpayPaymentId = itpayIdField?.value;
-    if (!itpayPaymentId) {
-      console.log(`[POLL] Task ${taskId} - no ITPay ID in field ${FIELD_ITPAY_ID}, skipping`);
-      continue;
-    }
+    const itpayId = itpayIdField?.value;
+    if (!itpayId) continue;
 
-    console.log(`[POLL] Checking task ${taskId}, payment_id=${itpayPaymentId}`);
+    if (processingSet.has(taskId)) continue;
+    processingSet.add(taskId);
 
-    const payment = await checkItpayPaymentById(itpayPaymentId);
-
+    const payment = await checkItpayById(itpayId);
     if (!payment) continue;
 
-    // Проверяем статус — paid/processing/completed = успех
-    const successStatuses = ['paid', 'processing', 'completed'];
-    const failedStatuses = ['cancelled', 'rejected', 'error', 'new'];
-
-    if (successStatuses.includes(payment.status)) {
-      processingSet.add(taskId);
-      const updated = await processPayment(taskId, payment);
-      if (updated) paidCount++;
-    } else if (failedStatuses.includes(payment.status)) {
-      console.log(`[POLL] Task ${taskId} - payment failed: ${payment.status}`);
-    } else {
-      console.log(`[POLL] Task ${taskId} - status: ${payment.status} (not final yet)`);
+    const success = ['paid', 'processing', 'completed'].includes(payment.status);
+    if (success) {
+      await processPayment(taskId, payment);
+      paidCount++;
     }
   }
 
-  console.log(`[POLL] === Done. Paid: ${paidCount} ===`);
+  console.log(`[POLL] Done. Paid: ${paidCount}`);
   return { polled: tasks.length, paid: paidCount };
 }
 
 // ============================================================
-// СОЗДАНИЕ ПЛАТЕЖЕЙ: отправляем ссылку на оплату + сохраняем ITPay ID
+// СОЗДАНИЕ ПЛАТЕЖЕЙ: создаём ссылку для оплаты
 // ============================================================
 async function createPayments() {
-  console.log('[CRON] === Creating payments ===');
+  console.log('[CRON] Creating payments...');
   const token = await getPyrusToken();
   const formId = process.env.PYRUS_FORM_ID || '2450518';
 
-  const registerRes = await fetch(
-    `https://api.pyrus.com/v4/forms/${formId}/register`,
-    { headers: { 'Authorization': `Bearer ${token}` } }
-  );
-  const text = await registerRes.text();
+  const res = await fetch(`https://api.pyrus.com/v4/forms/${formId}/register`,
+    { headers: { 'Authorization': `Bearer ${token}` } });
+  const text = await res.text();
   if (!text) return { created: 0 };
 
   const data = JSON.parse(text);
   const tasks = data.tasks || [];
-  console.log(`[CRON] Got ${tasks.length} tasks`);
-
-  const results = [];
+  console.log(`[CRON] ${tasks.length} tasks`);
+  let created = 0;
 
   for (const task of tasks) {
     const taskId = task.id;
 
-    // Пропускаем если ссылка уже отправлена
+    // Пропускаем если ссылка уже есть
     const linkField = task.fields?.find(f => f.id === FIELD_LINK);
     if (linkField?.value) continue;
 
-    // Пропускаем если уже есть ITPay ID (уже создавали)
+    // Пропускаем если уже есть ITPay ID
     const itpayIdField = task.fields?.find(f => f.id === FIELD_ITPAY_ID);
     if (itpayIdField?.value) continue;
 
+    // Пропускаем если уже оплачено
     const statusField = task.fields?.find(f => f.id === FIELD_STATUS);
-    const status = statusField?.value || '';
-    if (status.includes('✅')) continue;
+    if (statusField?.value?.includes('✅')) continue;
 
-    // Считаем сумму из таблицы
-    let totalAmount = 0;
-    const servicesTable = task.fields?.find(f => f.id === FIELD_TABLE);
-    if (servicesTable?.value && Array.isArray(servicesTable.value)) {
-      for (const row of servicesTable.value) {
+    // Считаем сумму
+    let total = 0;
+    const table = task.fields?.find(f => f.id === FIELD_TABLE);
+    if (table?.value && Array.isArray(table.value)) {
+      for (const row of table.value) {
         if (row?.cells) {
           const costCell = row.cells.find(c => c?.id === FIELD_COST_CELL);
           if (costCell?.value) {
             const val = parseFloat(String(costCell.value).replace(/\s/g, '').replace(',', '.'));
-            if (!isNaN(val) && val > 0) totalAmount += val;
+            if (!isNaN(val) && val > 0) total += val;
           }
         }
       }
     }
-    if (totalAmount <= 0) continue;
+    if (total <= 0) continue;
 
     const orderField = task.fields?.find(f => f.id === FIELD_ORDER_ID);
     const orderId = orderField?.value || `TASK-${taskId}`;
 
-    console.log(`[CRON] Creating payment: task=${taskId}, order=${orderId}, amount=${totalAmount}`);
+    console.log(`[CRON] Creating: task=${taskId}, order=${orderId}, amount=${total}`);
 
     try {
       const itpayRes = await fetch(`${ITPAY_API}/payments`, {
         method: 'POST',
-        headers: {
-          'Authorization': ITPAY_AUTH,
-          'Content-Type': 'application/json',
-        },
+        headers: { 'Authorization': ITPAY_AUTH, 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          amount: totalAmount.toFixed(2),
+          amount: total.toFixed(2),
           client_payment_id: orderId,
           description: `Оплата услуг АС Эксперт по заявке ${orderId}`,
           method: 'sbp',
@@ -258,17 +208,15 @@ async function createPayments() {
       });
 
       const itpay = await itpayRes.json();
-
       if (itpay.error || (itpay.error_code !== null && itpay.error_code !== undefined)) {
-        console.error(`[CRON] ITPay error:`, itpay.error);
+        console.error(`[CRON] ITPay error: ${itpay.error}`);
         continue;
       }
-
       if (!itpay.data?.id) continue;
 
-      const itpayPaymentId = itpay.data.id;
+      const itpayId = itpay.data.id;
 
-      // Извлекаем ссылку из QR
+      // Извлекаем ссылку
       let linkUrl = '';
       try {
         const qrUrls = typeof itpay.data.payment_qr_urls === 'string'
@@ -277,7 +225,6 @@ async function createPayments() {
         linkUrl = qrUrls?.desktop || qrUrls?.android || qrUrls?.ios || '';
       } catch (e) {}
       if (!linkUrl) linkUrl = itpay.data.receipts?.[0]?.link_to_receipt || '';
-
       if (!linkUrl) continue;
 
       const receipt = itpay.data.receipts?.[0];
@@ -289,7 +236,7 @@ async function createPayments() {
         return `${i+1}. ${p.label}\n   ${qty} × ${price.toFixed(2)} ₽ = ${(price*qty).toFixed(2)} ₽`;
       }).join('\n') || '—';
 
-      const totalSum = receipt?.total_sum || totalAmount.toFixed(2);
+      const totalSum = receipt?.total_sum || total.toFixed(2);
       const companyName = shop?.legal_entity?.name || 'ООО "АС ЭКСПЕРТ"';
       const companyInn = receipt?.inn || '';
 
@@ -299,33 +246,26 @@ async function createPayments() {
         `\n\nТОВАРЫ:\n${itemsText}\n` +
         `\n🔗 ${linkUrl}`;
 
-      await addCommentWithFieldUpdate(
-        taskId,
-        [
-          { id: FIELD_LINK, value: linkUrl },
-          { id: FIELD_STATUS, value: '⏳ Ждём оплату' },
-          { id: FIELD_ITPAY_ID, value: itpayPaymentId },
-        ],
-        comment
-      );
+      await addCommentWithFieldUpdate(taskId, [
+        { id: FIELD_LINK, value: linkUrl },
+        { id: FIELD_STATUS, value: '⏳ Ждём оплату' },
+        { id: FIELD_ITPAY_ID, value: itpayId },
+      ], comment);
 
-      results.push({ taskId, success: true, paymentId: itpayPaymentId });
-      console.log(`[CRON] ✓ task=${taskId}, payment=${itpayPaymentId}`);
+      console.log(`[CRON] ✓ task=${taskId}, payment=${itpayId}`);
+      created++;
     } catch (err) {
-      console.error(`[CRON] Error for task ${taskId}:`, err.message);
+      console.error(`[CRON] Error task ${taskId}: ${err.message}`);
     }
   }
 
-  console.log(`[CRON] === Done. Created: ${results.length} ===`);
-  return { created: results.length };
+  console.log(`[CRON] Done. Created: ${created}`);
+  return { created };
 }
 
 export default async function handler(req, res) {
   try {
-    // Polling всегда — проверяем задачи которые ждут оплату
-    const pollResult = await pollPendingPayments();
-
-    // Создание платежей — только если GET параметр create=1
+    const pollResult = await pollPending();
     const create = req.query.create === '1';
     const createResult = create ? await createPayments() : { created: 0 };
 
