@@ -6,7 +6,7 @@
  * - Команда /check для проверки статуса
  */
 
-import { pyrusRequest, getPyrusToken, addCommentWithFieldUpdate } from './_pyrus-auth.js';
+import { pyrusRequest, addCommentWithFieldUpdate } from './_pyrus-auth.js';
 
 const ITPAY_API = 'https://api.gw.itpay.ru/v1';
 const ITPAY_PUBLIC_ID = process.env.ITPAY_PUBLIC_ID;
@@ -19,52 +19,6 @@ const FIELD_ORDER_ID = 2;
 const FIELD_PHONE = 4;
 const FIELD_TABLE = 9;
 const FIELD_COST_CELL = 13;
-const FIELD_ITPAY_ID = 20;
-
-// Проверка статуса платежа в ITPay
-async function checkItpayStatus(paymentId) {
-  try {
-    const res = await fetch(`${ITPAY_API}/payments/${paymentId}`, {
-      headers: { 'Authorization': ITPAY_AUTH },
-    });
-    if (!res.ok) return null;
-    return await res.json();
-  } catch (e) {
-    return null;
-  }
-}
-
-// Обработка команды /check
-async function handleCheckCommand(taskId, itpayId) {
-  const payment = await checkItpayStatus(itpayId);
-  
-  if (!payment) {
-    return `❌ Не удалось проверить статус в ITPay`;
-  }
-  
-  const status = payment.status;
-  const amount = payment.amount;
-  const created = payment.created;
-  
-  let statusText = '';
-  let emoji = '';
-  
-  if (['paid', 'completed', 'processing'].includes(status)) {
-    emoji = '✅';
-    statusText = 'Оплачено';
-  } else if (status === 'new') {
-    emoji = '⏳';
-    statusText = 'Ожидает оплаты';
-  } else if (['cancelled', 'rejected', 'error'].includes(status)) {
-    emoji = '❌';
-    statusText = 'Ошибка/Отменено';
-  } else {
-    emoji = '❓';
-    statusText = `Статус: ${status}`;
-  }
-  
-  return `${emoji} **Статус: ${statusText}**\n💵 Сумма: ${amount} RUB\n📅 Создан: ${created}\n🆔 ITPay: ${payment.id}`;
-}
 
 export default async function handler(req, res) {
   if (req.method !== 'POST') {
@@ -77,48 +31,6 @@ export default async function handler(req, res) {
   try {
     if (!taskId) {
       return res.status(400).json({ error: 'No task_id' });
-    }
-
-    // Проверяем если это команда /check в комментарии
-    const event = data.event;
-    const comments = data.task?.comments || [];
-    if (event === 'comment' && comments.length > 0) {
-      const lastComment = comments[comments.length - 1];
-      const commentText = lastComment.text || '';
-      const author = lastComment.author || {};
-      
-      // Игнорируем комментарии от ботов
-      if (author.type === 'bot') {
-        return res.status(200).json({ skipped: 'bot comment' });
-      }
-      
-      if (commentText.trim().toLowerCase() === '/check') {
-        // Получаем ITPay ID из задачи
-        const fields = data.task?.fields || [];
-        const itpayIdField = fields.find(f => f.id === FIELD_ITPAY_ID);
-        const itpayId = itpayIdField?.value;
-        
-        // Отвечаем сразу, работаем асинхронно
-        if (!itpayId) {
-          addCommentWithFieldUpdate(
-            taskId, [],
-            `⏳ Проверяю статус...`
-          ).then(() => addCommentWithFieldUpdate(
-            taskId, [],
-            `❌ Нет ID платежа ITPay. Возможно платёж ещё не создан.`
-          ));
-          return res.status(200).json({ checked: true, result: 'no_itpay_id' });
-        }
-        
-        addCommentWithFieldUpdate(
-          taskId, [],
-          `⏳ Проверяю статус в ITPay...`
-        ).then(() => handleCheckCommand(taskId, itpayId))
-         .then(result => addCommentWithFieldUpdate(taskId, [], result))
-         .catch(err => addCommentWithFieldUpdate(taskId, [], `❌ Ошибка: ${err.message}`));
-        
-        return res.status(200).json({ checked: true, itpayId });
-      }
     }
 
     // Один запрос к Pyrus — получаем задачу
